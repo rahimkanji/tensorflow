@@ -1,4 +1,4 @@
-/* Copyright 2015 Google Inc. All Rights Reserved.
+/* Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -29,14 +29,15 @@ void ConcatCPU(DeviceBase* d,
                const std::vector<
                    std::unique_ptr<typename TTypes<T, 2>::ConstMatrix>>& inputs,
                typename TTypes<T, 2>::Matrix* output);
-
-// Assumes all inputs are nonempty
+#if GOOGLE_CUDA
 template <typename T>
-void ConcatGPU(const Eigen::GpuDevice& d,
-               const std::vector<
-                   std::unique_ptr<typename TTypes<T, 2>::ConstMatrix>>& inputs,
-               typename TTypes<T, 2>::Matrix* output);
+void ConcatGPU(
+    OpKernelContext* c,
+    const std::vector<std::unique_ptr<typename TTypes<T, 2>::ConstMatrix>>&
+        inputs_flat,
+    Tensor* output, typename TTypes<T, 2>::Tensor* output_flat);
 
+#endif  // GOOGLE_CUDA
 }  // namespace tensorflow
 
 #endif  // TENSORFLOW_KERNELS_CONCAT_LIB_H_

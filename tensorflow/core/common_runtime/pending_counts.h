@@ -1,7 +1,7 @@
 #ifndef THIRD_PARTY_TENSORFLOW_CORE_COMMON_RUNTIME_PENDING_COUNTS_H_
 #define THIRD_PARTY_TENSORFLOW_CORE_COMMON_RUNTIME_PENDING_COUNTS_H_
 
-/* Copyright 2015 Google Inc. All Rights Reserved.
+/* Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -71,6 +71,7 @@ class PendingCounts {
     }
   }
 
+  inline int num_nodes() const { return num_nodes_; }
   NodeState node_state(int id) {
     if (IsLarge(id)) {
       return NodeStateLarge(id);
@@ -185,12 +186,7 @@ class PendingCounts {
   // use one byte to hold both the pending and dead count for a node
   // where these together can fit in one byte, and we use a hash table
   // to handle the rare node ids that need larger counts than this.
-
-  // TODO(yuanbyu): We current use O(# of nodes in partition) space
-  // even for nested iterations where only a small fraction of the
-  // nodes are involved.  This is not efficient if the subgraph for
-  // the frame is only a small subset of the partition. We should make
-  // the vector size to be only the size of the frame subgraph.
+  // Each frame in this subgraph has its own PendingCounts.
 
   // We use 3 bits each for dead_count and pending.
   static const int kMaxCountForPackedCounts = 7;

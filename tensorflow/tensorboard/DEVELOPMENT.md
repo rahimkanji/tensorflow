@@ -5,24 +5,25 @@
 The first step is getting a TensorBoard development environment set up. You
 should start by making sure you have [nodejs](https://nodejs.org/en/) and
 [npm](https://www.npmjs.com/). On Ubuntu, `sudo apt-get install -y nodejs
-nodejs-legacy npm`.
+nodejs-legacy npm`. Ensure your npm version is >=3.0 by running
+'npm --version'. If the version is <3.0, run 'sudo npm install npm -g' to
+update to the latest version. You may need to open a new terminal window after
+updating in order to make use of the newly-installed version.
 
 Next, you'll want to install [gulp](http://gulpjs.com/) and
 [bower](http://bower.io/), which are used for build tooling and dependency
-management respectively. `sudo npm install -g gulp bower` will install them
-globally for convenience.
+management respectively. Both must be installed globally: `sudo npm install -g
+gulp bower` will do that.
 
 Then, cd into the TensorBoard directory:
 
 `cd tensorflow/tensorboard`
 
-and install dependenceis:
+and install dependencies:
 
-`npm install`
+`npm run prepare`
 
-`bower install`
-
-Finally, run gulp: `gulp`
+Then, run gulp: `gulp`
 
 (Don't worry if there are some linter errors.)
 
@@ -40,12 +41,11 @@ to create a realistic demo directory from your own data files.
 ## Launching TensorBoard with modified source
 
 If you are developing in open source, and have made some changes to TensorBoard
-that you'd like to try out on real data, then you need to overwrite
-`dist/tf-tensorboard.html`. Run `gulp vulcanize`, and you'll get a new file
-called `dist/tf-tensorboard.html.OPENSOURCE`. Overwite
-`dist/tf-tensorboard.html` with that file:
+that you'd like to try out on real data, then you need to regenerate
+`dist/tf-tensorboard.html`.
 
-`mv dist/tf-tensorboard.html.OPENSOURCE dist/tf-tensorboard.html`.
+Run `gulp regenerate`. That will recompile all of the TensorBoard assets, and
+produce a new tf-tensorboard.html with your changes.
 
 Now, you can use `bazel` to launch TensorBoard:
 

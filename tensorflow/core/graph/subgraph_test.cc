@@ -1,4 +1,4 @@
-/* Copyright 2015 Google Inc. All Rights Reserved.
+/* Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,7 +28,6 @@ limitations under the License.
 #include "tensorflow/core/lib/strings/str_util.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/platform/protobuf.h"
-#include "tensorflow/core/platform/regexp.h"
 #include "tensorflow/core/platform/test.h"
 #include "tensorflow/core/platform/test_benchmark.h"
 
@@ -266,11 +265,13 @@ TEST_F(SubgraphTest, Errors) {
   EXPECT_TRUE(
       HasSubstr(Subgraph("c:0", "b:0,c:0", ""), "both fed and fetched"));
   // Feed not found.
-  EXPECT_TRUE(HasSubstr(Subgraph("foo:0", "", ""), "unable to find"));
+  EXPECT_TRUE(HasSubstr(Subgraph("foo:0", "c:0", ""), "unable to find"));
   // Fetch not found.
   EXPECT_TRUE(HasSubstr(Subgraph("", "foo:0", ""), "not found"));
   // Target not found.
   EXPECT_TRUE(HasSubstr(Subgraph("", "", "foo"), "not found"));
+  // No targets specified.
+  EXPECT_TRUE(HasSubstr(Subgraph("", "", ""), "at least one target"));
 }
 
 REGISTER_OP("In").Output("o: float");

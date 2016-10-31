@@ -1,4 +1,4 @@
-/* Copyright 2015 Google Inc. All Rights Reserved.
+/* Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ limitations under the License.
 
 #include <algorithm>
 #include <cmath>
+#include <type_traits>
 
 #include "tensorflow/core/framework/numeric_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
@@ -25,12 +26,14 @@ limitations under the License.
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/tensor_types.h"
 #include "tensorflow/core/framework/types.h"
+#include "tensorflow/core/kernels/conv_ops.h"
 #include "tensorflow/core/kernels/depthwise_conv_op.h"
 #include "tensorflow/core/kernels/ops_util.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/platform/types.h"
 #include "tensorflow/core/util/padding.h"
+#include "tensorflow/core/util/use_cudnn.h"
 #include "tensorflow/core/util/work_sharder.h"
 
 #if GOOGLE_CUDA
@@ -51,121 +54,6 @@ typedef Eigen::GpuDevice GPUDevice;
 
 template <typename Device, typename T>
 struct LaunchDepthwiseConvOp;
-
-// Copies data from local region in 'input' specified by 'out_r' and 'out_'c'
-// to 'input_buffer'. The copied data is replicated by factor
-// 'args.depth_mulitplier', and padded to vector register-width boundaries so
-// that it is aligned for efficient traversal and vector multiply-add by the
-// depthwise kernel.
-//
-// EX:
-//   in_depth = 3, depth_multiplier = 2, filter [2, 2], register_width = 4
-//
-//   input: [batch, in_rows, in_cols, in_depth]
-//
-//     [a0, a1, a2, b0, b1, b2, ..., e0, e1, e2, f0, f1, f2, ...]
-//
-//   input_buffer (register boundaries shown):
-//     [a0, a0, a1, a1] [a2, a2, 0, 0]   in_row = 0, in_col = 0
-//     [b0, b0, b1, b1] [b2, b2, 0, 0]   in_row = 0, in_col = 1
-//     [e0, e0, e1, e1] [e2, e2, 0, 0]   in_row = 1, in_col = 0
-//     [f0, f0, f1, f1] [f2, f2, 0, 0]   in_row = 1, in_col = 1
-//
-// Returns replicated and padded data from specified input region in
-// 'input_buffer'.
-template <typename T>
-struct InputBufferCopyOp {
-  static void Run(const DepthwiseArgs& args,
-                  const int64 padded_filter_inner_dim_size, const int64 out_r,
-                  const int64 out_c, const T* input, T* input_buffer) {
-    typedef typename Eigen::internal::packet_traits<T>::type Packet;
-    static const int64 kPacketSize = (sizeof(Packet) / sizeof(T));
-
-    // Calculate vectorized and scalar (residual) lengths for 'in_depth'.
-    const int64 input_vectorized_size =
-        (args.in_depth / kPacketSize) * kPacketSize;
-    const int64 input_scalar_size = args.in_depth % kPacketSize;
-
-    // Calculate vectorized and scalar (residual) lengths for
-    // 'depth_multiplier'. This is used to efficiently replicate data for
-    // when 'depth_multiplier' > kPacketSize.
-    const int64 dm_vectorized_size =
-        (args.depth_multiplier / kPacketSize) * kPacketSize;
-    const int64 dm_scalar_size = args.depth_multiplier % kPacketSize;
-
-    // Calculate output padding length.
-    const int64 output_scalar_size = args.out_depth % kPacketSize;
-    const int64 output_pad_size =
-        output_scalar_size > 0 ? kPacketSize - output_scalar_size : 0;
-
-    const int64 replicated_packet_size = kPacketSize * args.depth_multiplier;
-
-    // Iterate through all rows x cols reading 'in_depth' from 'input' and
-    // replicating by 'depth_multiplier' into 'input_buffer' (otherwise
-    // zero-padding input buffer as needed).
-    auto* in_buf = input_buffer;
-    const int64 in_r_start = out_r * args.stride - args.pad_rows;
-    const int64 in_c_start = out_c * args.stride - args.pad_cols;
-
-    for (int64 f_r = 0; f_r < args.filter_rows; ++f_r) {
-      const int64 in_r = in_r_start + f_r;
-
-      for (int64 f_c = 0; f_c < args.filter_cols; ++f_c) {
-        const int64 in_c = in_c_start + f_c;
-
-        if (in_r >= 0 && in_r < args.in_rows && in_c >= 0 &&
-            in_c < args.in_cols) {
-          auto* in = input + (in_r * args.in_cols + in_c) * args.in_depth;
-          // Copy vectorized portion of inner dimension.
-          for (int64 d = 0; d < input_vectorized_size; d += kPacketSize) {
-            auto v = Eigen::internal::ploadu<Packet>(in + d);
-            for (int dm = 0; dm < args.depth_multiplier; ++dm) {
-              Eigen::internal::pscatter<T, Packet>(in_buf + dm, v,
-                                                   args.depth_multiplier);
-            }
-            in_buf += replicated_packet_size;
-          }
-
-          // Copy scalar portion of inner dimension.
-          for (int64 d = 0; d < input_scalar_size; ++d) {
-            T v = in[input_vectorized_size + d];
-            const int64 base = d * args.depth_multiplier;
-            if (dm_vectorized_size > 0) {
-              // Copy vectorized portion of replicated output.
-              // This branch is only taken if 'args.depth_multiplier' is
-              // vectorizable (i.e. args.depth_multiplier >= register width).
-              auto p = Eigen::internal::pset1<Packet>(v);
-              for (int64 dm = 0; dm < dm_vectorized_size; dm += kPacketSize) {
-                Eigen::internal::pstoreu<T>(in_buf + base + dm, p);
-              }
-              // Copy scalar portion of replicated output.
-              for (int64 dm = 0; dm < dm_scalar_size; ++dm) {
-                in_buf[base + dm_vectorized_size + dm] = v;
-              }
-            } else {
-              // Depth multiplier is less than one packet: scalar copy.
-              for (int dm = 0; dm < args.depth_multiplier; ++dm) {
-                in_buf[base + dm] = v;
-              }
-            }
-          }
-          in_buf += input_scalar_size * args.depth_multiplier;
-
-          // Pad the remainder of the output to vector register boundary.
-          for (int64 d = 0; d < output_pad_size; ++d) {
-            in_buf[d] = 0;
-          }
-          in_buf += output_pad_size;
-
-        } else {
-          // Zero pad.
-          memset(in_buf, 0, sizeof(T) * padded_filter_inner_dim_size);
-          in_buf += padded_filter_inner_dim_size;
-        }
-      }
-    }
-  }
-};
 
 // Computes the vectorized product of 'input_buffer' and 'filter' and stores
 // result in 'output' at location specified by 'out_r' and 'out_c'.
@@ -318,9 +206,9 @@ struct LaunchDepthwiseConvOp<CPUDevice, T> {
         for (int64 out_r = 0; out_r < args.out_rows; ++out_r) {
           for (int64 out_c = 0; out_c < args.out_cols; ++out_c) {
             // Populate 'input_buffer_data' with data from local input region.
-            InputBufferCopyOp<T>::Run(args, padded_filter_inner_dim_size, out_r,
-                                      out_c, input + in_base,
-                                      input_buffer_data);
+            functor::DepthwiseInputCopyOp<T>()(
+                args, padded_filter_inner_dim_size, out_r, out_c,
+                input + in_base, input_buffer_data);
 
             // Process buffered input across all filters and store to output.
             DepthwiseConv2DKernel<T>::Run(args, padded_filter_inner_dim_size,
@@ -339,6 +227,9 @@ struct LaunchDepthwiseConvOp<CPUDevice, T> {
           shard_cost, shard);
   }
 };
+
+// Extern template instantiated in conv_ops.cc.
+extern template class LaunchConv2DOp<CPUDevice, float>;
 
 #if GOOGLE_CUDA
 
@@ -362,6 +253,9 @@ struct LaunchDepthwiseConvOp<GPUDevice, T> {
   }
 };
 
+// Extern template instantiated in conv_ops.cc.
+extern template class LaunchConv2DOp<GPUDevice, float>;
+
 #endif
 
 template <typename Device, typename T>
@@ -382,18 +276,20 @@ class DepthwiseConv2dNativeOp : public BinaryOp<T> {
         errors::InvalidArgument("Current implementation does not yet support "
                                 "strides in the batch and depth dimensions."));
     OP_REQUIRES_OK(context, context->GetAttr("padding", &padding_));
+
+    // For special case when in_depth == 1.
+    use_cudnn_ = CanUseCudnn();
+    cudnn_use_autotune_ = CudnnUseAutotune();
   }
 
   void Compute(OpKernelContext* context) override {
     // Input tensor is of the following dimensions:
     // [ batch, in_rows, in_cols, in_depth ]
     const Tensor& input = context->input(0);
-    auto input_ptr = input.template flat<T>().data();
 
     // Input filter is of the following dimensions:
     // [ filter_rows, filter_cols, in_depth, depth_multiplier]
     const Tensor& filter = context->input(1);
-    auto filter_ptr = filter.template flat<T>().data();
 
     // For 2D convolution, there should be 4 dimensions.
     OP_REQUIRES(context, input.dims() == 4,
@@ -435,11 +331,13 @@ class DepthwiseConv2dNativeOp : public BinaryOp<T> {
     // batch or depth dimension).
     const int32 stride = strides_[1];
 
-    int32 out_rows = 0, out_cols = 0, pad_rows = 0, pad_cols = 0;
+    int64 out_rows = 0, out_cols = 0, pad_rows = 0, pad_cols = 0;
     OP_REQUIRES_OK(context,
-                   Get2dOutputSize(input_rows, input_cols, filter_rows,
-                                   filter_cols, stride, stride, padding_,
-                                   &out_rows, &out_cols, &pad_rows, &pad_cols));
+                   GetWindowedOutputSize(input_rows, filter_rows, stride,
+                                         padding_, &out_rows, &pad_rows));
+    OP_REQUIRES_OK(context,
+                   GetWindowedOutputSize(input_cols, filter_cols, stride,
+                                         padding_, &out_cols, &pad_cols));
     TensorShape out_shape({batch, out_rows, out_cols, out_depth});
     OP_REQUIRES(
         context, out_shape.num_elements() <= 2147483647,
@@ -451,7 +349,26 @@ class DepthwiseConv2dNativeOp : public BinaryOp<T> {
     // [ in_batch, out_rows, out_cols, out_depth ]
     Tensor* output = nullptr;
     OP_REQUIRES_OK(context, context->allocate_output(0, out_shape, &output));
-    auto output_ptr = output->template flat<T>().data();
+
+    VLOG(2) << "DepthwiseConv2dNative: "
+            << " Input: [" << batch << ", " << input_rows << ", " << input_cols
+            << ", " << in_depth << "]; Filter: [" << filter_rows << ", "
+            << filter_cols << ", " << in_depth << ", " << depth_multiplier
+            << "]; stride = " << stride << ", pad_rows = " << pad_rows
+            << ", pad_cols = " << pad_cols << ", output: [" << batch << ", "
+            << out_rows << ", " << out_cols << ", " << out_depth << "]";
+
+    // If there is nothing to compute, return.
+    if (out_shape.num_elements() == 0) {
+      return;
+    }
+
+    if (std::is_same<T, float>::value && in_depth == 1) {
+      launcher_.launch(context, use_cudnn_, cudnn_use_autotune_, input, filter,
+                       stride, stride, BrainPadding2EigenPadding(padding_),
+                       output, FORMAT_NHWC);
+      return;
+    }
 
     DepthwiseArgs args;
     args.batch = batch;
@@ -468,18 +385,9 @@ class DepthwiseConv2dNativeOp : public BinaryOp<T> {
     args.out_cols = out_cols;
     args.out_depth = out_depth;
 
-    VLOG(2) << "DepthwiseConv2dNative: "
-            << " Input: [" << batch << ", " << input_rows << ", " << input_cols
-            << ", " << in_depth << "]; Filter: [" << filter_rows << ", "
-            << filter_cols << ", " << in_depth << ", " << depth_multiplier
-            << "]; stride = " << stride << ", pad_rows = " << pad_rows
-            << ", pad_cols = " << pad_cols << ", output: [" << batch << ", "
-            << out_rows << ", " << out_cols << ", " << out_depth << "]";
-
-    // If there is nothing to compute, return.
-    if (out_shape.num_elements() == 0) {
-      return;
-    }
+    auto input_ptr = input.template flat<T>().data();
+    auto filter_ptr = filter.template flat<T>().data();
+    auto output_ptr = output->template flat<T>().data();
     LaunchDepthwiseConvOp<Device, T>::launch(context, args, input_ptr,
                                              filter_ptr, output_ptr);
   }
@@ -488,17 +396,21 @@ class DepthwiseConv2dNativeOp : public BinaryOp<T> {
   std::vector<int32> strides_;
   Padding padding_;
 
+  // For the case in_depth == 1.
+  LaunchConv2DOp<Device, T> launcher_;
+  bool use_cudnn_;
+  bool cudnn_use_autotune_;
+
   TF_DISALLOW_COPY_AND_ASSIGN(DepthwiseConv2dNativeOp);
 };
 
-REGISTER_KERNEL_BUILDER(
-    Name("DepthwiseConv2dNative").Device(DEVICE_CPU).TypeConstraint<float>("T"),
-    DepthwiseConv2dNativeOp<CPUDevice, float>);
+#define REGISTER_CPU_KERNEL(T)                                                 \
+  REGISTER_KERNEL_BUILDER(                                                     \
+      Name("DepthwiseConv2dNative").Device(DEVICE_CPU).TypeConstraint<T>("T"), \
+      DepthwiseConv2dNativeOp<CPUDevice, T>);
 
-REGISTER_KERNEL_BUILDER(Name("DepthwiseConv2dNative")
-                            .Device(DEVICE_CPU)
-                            .TypeConstraint<double>("T"),
-                        DepthwiseConv2dNativeOp<CPUDevice, double>);
+TF_CALL_float(REGISTER_CPU_KERNEL);
+TF_CALL_double(REGISTER_CPU_KERNEL);
 
 #if GOOGLE_CUDA
 REGISTER_KERNEL_BUILDER(

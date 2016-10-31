@@ -41,6 +41,14 @@ filegroup(
 )
 
 filegroup(
+    name = "iron_a11y_announcer",
+    srcs = [
+        "index.html",
+        "iron-a11y-announcer.html",
+    ],
+)
+
+filegroup(
     name = "iron_a11y_keys_behavior",
     srcs = [
         "index.html",
@@ -341,10 +349,31 @@ filegroup(
 )
 
 filegroup(
+    name = "paper_dialog",
+    srcs = [
+        "index.html",
+        "paper-dialog.html",
+    ],
+)
+
+filegroup(
+    name = "paper_dialog_behavior",
+    srcs = [
+        "index.html",
+        "paper-dialog-behavior.html",
+        "paper-dialog-common.css",
+        "paper-dialog-shared-styles.html",
+    ],
+)
+
+filegroup(
     name = "paper_dropdown_menu",
     srcs = [
         "index.html",
         "paper-dropdown-menu.html",
+        "paper-dropdown-menu-icons.html",
+        "paper-dropdown-menu-light.html",
+        "paper-dropdown-menu-shared-styles.html",
     ],
 )
 
@@ -361,6 +390,7 @@ filegroup(
     srcs = [
         "index.html",
         "paper-icon-button.html",
+        "paper-icon-button-light.html",
     ],
 )
 
@@ -389,6 +419,14 @@ filegroup(
         "paper-item-behavior.html",
         "paper-item-body.html",
         "paper-item-shared-styles.html",
+    ],
+)
+
+filegroup(
+    name = "paper_listbox",
+    srcs = [
+        "index.html",
+        "paper-listbox.html",
     ],
 )
 
@@ -502,6 +540,14 @@ filegroup(
     srcs = [
         "index.html",
         "paper-toolbar.html",
+    ],
+)
+
+filegroup(
+    name = "paper_tooltip",
+    srcs = [
+        "index.html",
+        "paper-tooltip.html",
     ],
 )
 

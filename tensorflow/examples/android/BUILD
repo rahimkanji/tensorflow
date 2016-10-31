@@ -1,23 +1,23 @@
 # Description:
-#   Tensorflow camera demo app for Android.
+#   TensorFlow camera demo app for Android.
 
 package(default_visibility = ["//visibility:public"])
 
 licenses(["notice"])  # Apache 2.0
 
+load("//tensorflow:tensorflow.bzl", "tf_copts")
+
 exports_files(["LICENSE"])
+
+LINKER_SCRIPT = "//tensorflow/contrib/android:jni/version_script.lds"
 
 cc_binary(
     name = "libtensorflow_demo.so",
     srcs = glob([
         "jni/**/*.cc",
         "jni/**/*.h",
-    ]) + [":libpthread.so"],
-    copts = [
-        "-std=c++11",
-        "-mfpu=neon",
-        "-O2",
-    ],
+    ]) + [],
+    copts = tf_copts(),
     linkopts = [
         "-landroid",
         "-ljnigraphics",
@@ -26,7 +26,8 @@ cc_binary(
         "-z defs",
         "-s",
         "-Wl,--icf=all",  # Identical Code Folding
-        "-Wl,--exclude-libs,ALL",  # Exclude syms in all libs from auto export
+        "-Wl,--version-script",  # This line must be directly followed by LINKER_SCRIPT.
+        LINKER_SCRIPT,
     ],
     linkshared = 1,
     linkstatic = 1,
@@ -34,28 +35,16 @@ cc_binary(
         "manual",
         "notap",
     ],
-    deps = ["//tensorflow/core:android_tensorflow_lib"],
-)
-
-# This library only exists as a workaround to satisfy dependencies
-# that declare -lpthread in their linkopts. Although Android supports
-# pthreads, it does not provide it as a separate library.
-cc_binary(
-    name = "libpthread.so",
-    srcs = [],
-    linkopts = ["-shared"],
-    tags = [
-        "manual",
-        "notap",
+    deps = [
+        "//tensorflow/contrib/android:android_tensorflow_inference_jni",
+        "//tensorflow/core:android_tensorflow_lib",
+        LINKER_SCRIPT,
     ],
 )
 
 cc_library(
     name = "tensorflow_native_libs",
-    srcs = [
-        ":libpthread.so",
-        ":libtensorflow_demo.so",
-    ],
+    srcs = [":libtensorflow_demo.so"],
     tags = [
         "manual",
         "notap",
@@ -66,7 +55,9 @@ android_binary(
     name = "tensorflow_demo",
     srcs = glob([
         "src/**/*.java",
-    ]),
+    ]) + [
+        "//tensorflow/contrib/android:android_tensorflow_inference_java_srcs",
+    ],
     assets = glob(["assets/**"]),
     assets_dir = "assets",
     custom_package = "org.tensorflow.demo",
@@ -91,6 +82,8 @@ filegroup(
             "**/OWNERS",
             "bin/**",
             "gen/**",
+            "gradleBuild/**",
+            "libs/**",
         ],
     ),
     visibility = ["//tensorflow:__subpackages__"],

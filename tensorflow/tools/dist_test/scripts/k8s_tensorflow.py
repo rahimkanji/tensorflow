@@ -1,5 +1,5 @@
 #!/usr/bin/python
-# Copyright 2016 Google Inc. All Rights Reserved.
+# Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 # limitations under the License.
 # ==============================================================================
 
-"""Generates YAML configuration files for distributed Tensorflow workers.
+"""Generates YAML configuration files for distributed TensorFlow workers.
 
 The workers will be run in a Kubernetes (k8s) container cluster.
 """
@@ -34,6 +34,9 @@ DEFAULT_DOCKER_IMAGE = 'tensorflow/tf_grpc_test_server'
 DEFAULT_PORT = 2222
 
 # TODO(cais): Consider adding resource requests/limits to the pods.
+
+# Worker pods will mount host volume /shared, as a convenient way to create
+# shared storage among workers during local tests.
 WORKER_RC = (
     """apiVersion: v1
 kind: ReplicationController
@@ -55,6 +58,13 @@ spec:
           - --task_id={worker_id}
         ports:
         - containerPort: {port}
+        volumeMounts:
+        - name: shared
+          mountPath: /shared
+      volumes:
+      - name: shared
+        hostPath:
+          path: /shared
 """)
 WORKER_SVC = (
     """apiVersion: v1
@@ -105,6 +115,13 @@ spec:
           - --task_id={param_server_id}
         ports:
         - containerPort: {port}
+        volumeMounts:
+        - name: shared
+          mountPath: /shared
+      volumes:
+      - name: shared
+        hostPath:
+          path: /shared
 """)
 PARAM_SERVER_SVC = (
     """apiVersion: v1
@@ -114,6 +131,19 @@ metadata:
   labels:
     tf-ps: "{param_server_id}"
 spec:
+  ports:
+  - port: {port}
+  selector:
+    tf-ps: "{param_server_id}"
+""")
+PARAM_LB_SVC = ("""apiVersion: v1
+kind: Service
+metadata:
+  name: tf-ps{param_server_id}
+  labels:
+    tf-ps: "{param_server_id}"
+spec:
+  type: LoadBalancer
   ports:
   - port: {port}
   selector:
@@ -180,11 +210,11 @@ def GenerateConfig(num_workers,
         port=port,
         worker_id=worker,
         docker_image=docker_image,
-        cluster_spec=WorkerClusterSpec(num_workers,
-                                       num_param_servers,
-                                       port))
+        cluster_spec=WorkerClusterSpecString(num_workers,
+                                             num_param_servers,
+                                             port))
     config += '---\n'
-    if worker == 0 and request_load_balancer:
+    if request_load_balancer:
       config += WORKER_LB_SVC.format(port=port,
                                      worker_id=worker)
     else:
@@ -197,34 +227,36 @@ def GenerateConfig(num_workers,
         port=port,
         param_server_id=param_server,
         docker_image=docker_image,
-        cluster_spec=ParamServerClusterSpec(num_workers,
-                                            num_param_servers,
-                                            port))
+        cluster_spec=ParamServerClusterSpecString(num_workers,
+                                                  num_param_servers,
+                                                  port))
     config += '---\n'
-    config += PARAM_SERVER_SVC.format(port=port,
-                                      param_server_id=param_server)
+    if request_load_balancer:
+      config += PARAM_LB_SVC.format(port=port, param_server_id=param_server)
+    else:
+      config += PARAM_SERVER_SVC.format(port=port, param_server_id=param_server)
     config += '---\n'
 
   return config
 
 
-def WorkerClusterSpec(num_workers,
+def WorkerClusterSpecString(num_workers,
+                            num_param_servers,
+                            port):
+  """Generates worker cluster spec."""
+  return ClusterSpecString(num_workers, num_param_servers, port)
+
+
+def ParamServerClusterSpecString(num_workers,
+                                 num_param_servers,
+                                 port):
+  """Generates parameter server spec."""
+  return ClusterSpecString(num_workers, num_param_servers, port)
+
+
+def ClusterSpecString(num_workers,
                       num_param_servers,
                       port):
-  """Generates worker cluster spec."""
-  return ClusterSpec(num_workers, num_param_servers, port)
-
-
-def ParamServerClusterSpec(num_workers,
-                           num_param_servers,
-                           port):
-  """Generates parameter server spec."""
-  return ClusterSpec(num_workers, num_param_servers, port)
-
-
-def ClusterSpec(num_workers,
-                num_param_servers,
-                port):
   """Generates general cluster spec."""
   spec = 'worker|'
   for worker in range(num_workers):

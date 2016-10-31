@@ -1,4 +1,4 @@
-# Copyright 2015 Google Inc. All Rights Reserved.
+# Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,6 +30,7 @@
 ## Utility functions
 
 @@device
+@@container
 @@name_scope
 @@control_dependencies
 @@convert_to_tensor
@@ -37,6 +38,7 @@
 @@get_default_graph
 @@reset_default_graph
 @@import_graph_def
+@@load_file_system_library
 @@load_op_library
 
 ## Graph collections
@@ -49,6 +51,7 @@
 ## Defining new operations
 
 @@RegisterGradient
+@@NotDifferentiable
 @@NoGradient
 @@RegisterShape
 @@TensorShape
@@ -66,15 +69,18 @@ from __future__ import division
 from __future__ import print_function
 
 # Classes used when building a Graph.
+from tensorflow.python.framework.device import DeviceSpec
 from tensorflow.python.framework.ops import Graph
 from tensorflow.python.framework.ops import Operation
 from tensorflow.python.framework.ops import Tensor
+from tensorflow.python.framework.ops import Output
 from tensorflow.python.framework.ops import SparseTensor
 from tensorflow.python.framework.ops import SparseTensorValue
 from tensorflow.python.framework.ops import IndexedSlices
 
 # Utilities used when building a Graph.
 from tensorflow.python.framework.ops import device
+from tensorflow.python.framework.ops import container
 from tensorflow.python.framework.ops import name_scope
 from tensorflow.python.framework.ops import op_scope
 from tensorflow.python.framework.ops import control_dependencies
@@ -92,6 +98,7 @@ from tensorflow.python.framework.importer import import_graph_def
 
 # Needed when you defined a new Op in C++.
 from tensorflow.python.framework.ops import RegisterGradient
+from tensorflow.python.framework.ops import NotDifferentiable
 from tensorflow.python.framework.ops import NoGradient
 from tensorflow.python.framework.ops import RegisterShape
 from tensorflow.python.framework.tensor_shape import Dimension
@@ -100,6 +107,7 @@ from tensorflow.python.framework.tensor_shape import TensorShape
 # Needed when interfacing tensorflow to new array libraries
 from tensorflow.python.framework.ops import register_tensor_conversion_function
 
+# go/tf-wildcard-import
 # pylint: disable=wildcard-import
 from tensorflow.python.framework.dtypes import *
 
